@@ -208,7 +208,7 @@ global.fluming = 'https://www6.flamingtext.com/net-fu/proxy_form.cgi?&imageoutpu
 global.flarun = 'https://www6.flamingtext.com/net-fu/proxy_form.cgi?&imageoutput=true&script=runner-logo&doScale=true&scaleWidth=800&scaleHeight=500&fontsize=100&text='
 global.flasmurf = 'https://www6.flamingtext.com/net-fu/proxy_form.cgi?&imageoutput=true&script=smurfs-logo&doScale=true&scaleWidth=800&scaleHeight=500&fontsize=100&text='
 
-global.keyopenai = "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"
+global.keyopenai = ""
 //documents variants
 global.doc1 = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 global.doc2 = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
